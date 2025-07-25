@@ -3,16 +3,3 @@ version: '1.0-SNAPSHOT'
 main: io.github.Luft1.deathSwap.DeathSwap
 api-version: '1.21'
 description: A death swap plugin that supports an infinite number of players.
-commands:
-  DeathSwapStart:
-    description: Starts a new round of Death Swap.
-    usage: /DeathSwapStart
-    permission: deathswap.admin
-  DeathSwapEnd:
-    description: Ends the current round of Death Swap.
-    usage: /DeathSwapEnd
-    permission: deathswap.admin
-permissions:
-  deathswap.admin:
-    description: Gives permission to start and end Death Swap rounds.
-    default: op

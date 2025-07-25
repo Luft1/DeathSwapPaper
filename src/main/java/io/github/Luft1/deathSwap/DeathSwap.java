@@ -1,30 +1,35 @@
 package io.github.Luft1.deathSwap;
 
-import org.bukkit.*;
-import org.bukkit.plugin.java.*;
+import org.bukkit.command.CommandMap;
+import org.bukkit.plugin.java.JavaPlugin;
 
 public final class DeathSwap extends JavaPlugin {
 
+    private SafeLocationFinder safeLocationFinder;
+
     @Override
     public void onEnable() {
-        // Initialize SwapManager first
-        Bukkit.getLogger().info("death swap plugin starting");
-        SwapManager.init(this);
+        getLogger().info("death swap plugin starting");
 
-        // Then use it
-        DeathSwapCommand commandExecutor = new DeathSwapCommand();
-        getCommand("DeathSwapStart").setExecutor(commandExecutor);
-        getCommand("DeathSwapEnd").setExecutor(commandExecutor);
+        // Create, store, and initialize the location finder service.
+        safeLocationFinder = new SafeLocationFinder(this);
+        safeLocationFinder.initialize();
 
-        getLogger().info("Registering events for SwapManager...");
-        getServer().getPluginManager().registerEvents(SwapManager.get(), this);
+        // Pass the single instance to the SwapManager.
+        SwapManager swapManager = new SwapManager(this, safeLocationFinder);
+
+        DeathSwapCommand deathSwapCommand = new DeathSwapCommand(swapManager);
+        CommandMap commandMap = getServer().getCommandMap();
+        commandMap.register("deathswap", new CommandWrapper("deathswap", deathSwapCommand));
+        getServer().getPluginManager().registerEvents(swapManager, this);
         getLogger().info("Events registered!");
-
     }
 
     @Override
     public void onDisable() {
-        // Plugin shutdown logic
-        Bukkit.getLogger().info("death swap plugin terminating");
+        getLogger().info("death swap plugin terminating");
+        if (safeLocationFinder != null) {
+            safeLocationFinder.shutdown();
+        }
     }
 }
