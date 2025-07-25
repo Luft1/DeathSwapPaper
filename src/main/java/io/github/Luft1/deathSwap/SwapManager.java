@@ -10,6 +10,7 @@ import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 
 public class SwapManager implements Listener {
     private final DeathSwap SwapPlugin;
@@ -90,16 +91,20 @@ public class SwapManager implements Listener {
 
     private void addContestant(Player player) {
         Location safeLocation = finder.getNextSafeLocation();
-        player.teleportAsync(safeLocation).thenRun(() -> {
-            player.sendMessage("This is your starting location");
-            player.setGameMode(GameMode.SURVIVAL);
-            player.getInventory().clear();
-            player.setHealth(20);
-            player.setFoodLevel(20);
-            player.setSaturation(5);
-            contestants.add(player);
+        // Load the chunk asynchronously before teleporting
+        safeLocation.getWorld().getChunkAtAsync(safeLocation).thenRun(() -> {
+            player.teleportAsync(safeLocation).thenRun(() -> {
+                player.sendMessage("This is your starting location");
+                player.setGameMode(GameMode.SURVIVAL);
+                player.getInventory().clear();
+                player.setHealth(20);
+                player.setFoodLevel(20);
+                player.setSaturation(5);
+                contestants.add(player);
+            });
         });
     }
+
 
     @EventHandler
     public void onPlayerQuit(org.bukkit.event.player.PlayerQuitEvent event) {
@@ -154,7 +159,7 @@ public class SwapManager implements Listener {
             Player winner = contestants.getFirst();
             Bukkit.broadcast(MiniMessage.miniMessage().deserialize(String.format("<gold>%s won the round!</gold>", winner.getName())));
         } else {
-            Bukkit.broadcast(MiniMessage.miniMessage().deserialize("<green>The round has ended in a tie!"));
+            Bukkit.broadcast(MiniMessage.miniMessage().deserialize("<green>The round has ended in a tie!</green>"));
         }
 
         // Move all remaining contestants to spectators
@@ -175,28 +180,36 @@ public class SwapManager implements Listener {
 
         swapDestinations.clear(); // Clear old swap data before creating new assignments
 
+        List<CompletableFuture<Boolean>> teleportFutures = new ArrayList<>();
+
         for (int i = 0; i < oldPlayerOrder.length; i++) {
             Player playerToTeleport = newPlayerOrder[i];
             Player originalOwnerOfLocation = oldPlayerOrder[i];
-            playerToTeleport.sendMessage("swapping to "+ originalOwnerOfLocation.getName() +"'s location");
             Location targetLocation = originalPlayerLocations[i];
 
-            playerToTeleport.teleportAsync(targetLocation);
-            // Record that playerToTeleport is now at originalOwnerOfLocation's spot
             swapDestinations.put(playerToTeleport, originalOwnerOfLocation);
+
+            CompletableFuture<Boolean> future = targetLocation.getWorld().getChunkAtAsync(targetLocation)
+                    .thenCompose(chunk -> {
+                        playerToTeleport.sendMessage("swapping to " + originalOwnerOfLocation.getName() + "'s location");
+                        return playerToTeleport.teleportAsync(targetLocation);
+                    });
+
+            teleportFutures.add(future);
         }
 
-        scheduleNextSwap();
+        CompletableFuture.allOf(teleportFutures.toArray(new CompletableFuture[0])).thenRun(this::scheduleNextSwap);
     }
+
 
     public void startRound() {
         if (Bukkit.getOnlinePlayers().size() < 2) {
-            Bukkit.broadcast(MiniMessage.miniMessage().deserialize("<red>Not enough players to start a round! At least 2 are required."));
+            Bukkit.broadcast(MiniMessage.miniMessage().deserialize("<red>Not enough players to start a round! At least 2 are required.</red>"));
             return;
         }
 
         roundInProgress = true;
-        Bukkit.broadcast(MiniMessage.miniMessage().deserialize("<green>The round is starting now!"));
+        Bukkit.broadcast(MiniMessage.miniMessage().deserialize("<green>The round is starting now!</green>"));
         contestants.clear();
         spectators.clear();
         swapDestinations.clear();
@@ -206,13 +219,13 @@ public class SwapManager implements Listener {
         }
 
         bukkitTasks.add(new BukkitRunnable() {
-            @Override
-            public void run() {
-                if (roundInProgress) {
-                    scheduleNextSwap();
-                }
-            }
-        }.runTaskLater(SwapPlugin, 60L)
+                    @Override
+                    public void run() {
+                        if (roundInProgress) {
+                            scheduleNextSwap();
+                        }
+                    }
+                }.runTaskLater(SwapPlugin, 60L)
         );
     }
 
@@ -228,7 +241,7 @@ public class SwapManager implements Listener {
             }
         }.runTaskLater(SwapPlugin, ticksBeforeNextSwap));
     }
-//
+
     private int getRandomSwapTimeWeighted() {
         Random random = new Random();
         int MAX_TIME_BETWEEN_SWAPS = 60;
