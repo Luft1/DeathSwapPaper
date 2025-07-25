@@ -228,7 +228,7 @@ public class SwapManager implements Listener {
             }
         }.runTaskLater(SwapPlugin, ticksBeforeNextSwap));
     }
-
+//
     private int getRandomSwapTimeWeighted() {
         Random random = new Random();
         int MAX_TIME_BETWEEN_SWAPS = 60;
