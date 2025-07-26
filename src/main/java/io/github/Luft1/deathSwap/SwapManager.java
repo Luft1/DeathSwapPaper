@@ -1,3 +1,4 @@
+
 package io.github.Luft1.deathSwap;
 
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -19,11 +20,18 @@ public class SwapManager implements Listener {
     private final ArrayList<Player> contestants = new ArrayList<>();
     private final ArrayList<Player> spectators = new ArrayList<>();
     private final HashSet<BukkitTask> bukkitTasks = new HashSet<>();
+    private final int MAX_TIME_BETWEEN_SWAPS = 120;
 
     // This map will store who swapped with whom.
     // Key: The player who was teleported (the one who might die).
     // Value: The player whose location they were sent to.
     private final Map<Player, Player> swapDestinations = new HashMap<>();
+
+    // --- Timer Fields ---
+    private BukkitTask timerTask;
+    private long lastSwapTime;
+    private int secondsUntilNextSwap;
+
 
     public SwapManager(DeathSwap plugin, SafeLocationFinder locationFinder) {
         this.SwapPlugin = plugin;
@@ -148,6 +156,7 @@ public class SwapManager implements Listener {
             bukkitTasks.forEach(BukkitTask::cancel);
             bukkitTasks.clear();
         }
+        stopTimer(); // Centralized cleanup
     }
 
     public void endRound() {
@@ -198,7 +207,10 @@ public class SwapManager implements Listener {
             teleportFutures.add(future);
         }
 
-        CompletableFuture.allOf(teleportFutures.toArray(new CompletableFuture[0])).thenRun(this::scheduleNextSwap);
+        CompletableFuture.allOf(teleportFutures.toArray(new CompletableFuture[0])).thenRun(() -> {
+            this.lastSwapTime = System.currentTimeMillis(); // Reset after swap
+            scheduleNextSwap();
+        });
     }
 
 
@@ -208,6 +220,7 @@ public class SwapManager implements Listener {
             return;
         }
 
+        clearAllScheduledSwaps(); // Clear any old tasks
         roundInProgress = true;
         Bukkit.broadcast(MiniMessage.miniMessage().deserialize("<green>The round is starting now!</green>"));
         contestants.clear();
@@ -218,33 +231,90 @@ public class SwapManager implements Listener {
             addContestant(player);
         }
 
+        // Initial delay before the first swap
         bukkitTasks.add(new BukkitRunnable() {
                     @Override
                     public void run() {
                         if (roundInProgress) {
-                            scheduleNextSwap();
+                            lastSwapTime = System.currentTimeMillis();
+                            startTimer(); // Start the timer
+                            scheduleNextSwap(); // Schedule the first swap
                         }
                     }
-                }.runTaskLater(SwapPlugin, 60L)
+                }.runTaskLater(SwapPlugin, 60L) // 3-second delay before anything happens
         );
     }
 
     private void scheduleNextSwap() {
-        int secondsBeforeNextSwap = getRandomSwapTimeWeighted();
-        int ticksBeforeNextSwap = secondsBeforeNextSwap * 20;
-        Bukkit.getLogger().info("Next swap scheduled in " + secondsBeforeNextSwap + " seconds.");
+        this.secondsUntilNextSwap = getRandomSwapTimeWeighted();
+        int ticksBeforeNextSwap = this.secondsUntilNextSwap * 20;
+        Bukkit.getLogger().info("Next swap scheduled in " + secondsUntilNextSwap + " seconds.");
 
-        bukkitTasks.add(new BukkitRunnable() {
+        BukkitTask swapTask = new BukkitRunnable() {
             @Override
             public void run() {
                 swapPlayers();
             }
-        }.runTaskLater(SwapPlugin, ticksBeforeNextSwap));
+        }.runTaskLater(SwapPlugin, ticksBeforeNextSwap);
+        bukkitTasks.add(swapTask);
+    }
+
+    private void stopTimer() {
+        if (timerTask != null) {
+            timerTask.cancel();
+            bukkitTasks.remove(timerTask);
+            timerTask = null;
+        }
+    }
+
+    private void startTimer() {
+        stopTimer(); // Ensure no other timer is running
+
+        timerTask = new BukkitRunnable() {
+            @Override
+            public void run() {
+                if (!roundInProgress) {
+                    this.cancel(); // Stop if the round has ended
+                    return;
+                }
+
+                long elapsedMillis = System.currentTimeMillis() - lastSwapTime;
+                long elapsedSeconds = elapsedMillis / 1000;
+
+                // Prevent division by zero if the next swap time isn't set yet
+                if (MAX_TIME_BETWEEN_SWAPS <= 0) return;
+
+                // Determine the color and hazard level based on how close the next swap is.
+                double dangerRatio = (double) elapsedSeconds / MAX_TIME_BETWEEN_SWAPS;
+                String color;
+                String hazardLevel;
+                if (dangerRatio > 0.8) {
+                    color = "<red>";
+                    hazardLevel = "DANGER";
+                } else if (dangerRatio > 0.5) {
+                    color = "<yellow>";
+                    hazardLevel = "UNSAFE";
+                } else {
+                    color = "<green>";
+                    hazardLevel = "SAFE";
+                }
+
+                // Format the message to include the timer and the hazard level
+                String timerMessage = String.format("%s%s | Time: %02d:%02d",
+                        color, hazardLevel, elapsedSeconds / 60, elapsedSeconds % 60);
+
+                // Send the formatted timer to all contestants.
+                for (Player player : contestants) {
+                    player.sendActionBar(MiniMessage.miniMessage().deserialize(timerMessage));
+                }
+            }
+        }.runTaskTimer(SwapPlugin, 0L, 20L); // Run every second
+
+        bukkitTasks.add(timerTask);
     }
 
     private int getRandomSwapTimeWeighted() {
         Random random = new Random();
-        int MAX_TIME_BETWEEN_SWAPS = 60;
         float SWAP_PROBABILITY_WEIGHT = 2;
         return (int) Math.round(Math.pow(random.nextDouble(), 1.0 / SWAP_PROBABILITY_WEIGHT) * (MAX_TIME_BETWEEN_SWAPS - 1)) + 1;
     }
